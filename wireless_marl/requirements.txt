@@ -1,0 +1,6 @@
+numpy
+matplotlib
+PyYAML
+pytest
+torch
+torch
