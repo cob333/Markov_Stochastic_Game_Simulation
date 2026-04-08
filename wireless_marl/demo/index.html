@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>无线多智能体实时演示平台</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">无线 MARL 演示</p>
+          <h1>四设备单信道实时策略演示</h1>
+          <p class="subcopy">
+            在二状态无线信道上回放已训练策略，逐步观察碰撞、成功发送以及系统累计行为，
+            用于课堂演示和实验结果说明。
+          </p>
+        </div>
+        <div class="hero-meta">
+          <span id="server-status" class="status-pill">正在加载模型…</span>
+          <span id="session-badge" class="session-pill">未创建会话</span>
+        </div>
+      </header>
+
+      <section class="control-panel">
+        <div class="control-group">
+          <label for="algo-select">算法</label>
+          <select id="algo-select"></select>
+        </div>
+        <div class="control-group">
+          <label for="seed-input">随机种子</label>
+          <input id="seed-input" type="number" value="0" min="0" step="1" />
+        </div>
+        <div class="control-group">
+          <label for="speed-input">自动播放间隔</label>
+          <input id="speed-input" type="range" min="150" max="1200" step="50" value="450" />
+          <span id="speed-label">450 毫秒</span>
+        </div>
+        <div class="button-row">
+          <button id="reset-btn" class="primary">重置会话</button>
+          <button id="step-btn">执行下一步</button>
+          <button id="autoplay-btn">开始自动播放</button>
+        </div>
+      </section>
+
+      <section class="summary-grid">
+        <article class="channel-panel">
+          <div class="panel-header">
+            <span class="panel-tag">信道</span>
+            <span id="step-counter" class="panel-meta">第 0 步</span>
+          </div>
+          <div class="channel-body">
+            <div id="channel-indicator" class="channel-indicator idle">空闲</div>
+            <div class="mini-facts">
+              <div>
+                <span class="fact-label">策略文件</span>
+                <strong id="policy-path">—</strong>
+              </div>
+              <div>
+                <span class="fact-label">上一时隙发送数</span>
+                <strong id="last-k-tx">—</strong>
+              </div>
+              <div>
+                <span class="fact-label">下一步拥堵概率</span>
+                <strong id="next-cong">—</strong>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="metrics-panel">
+          <div class="panel-header">
+            <span class="panel-tag">指标</span>
+            <span class="panel-meta">累计统计</span>
+          </div>
+          <div class="metrics-grid" id="metrics-grid"></div>
+        </article>
+      </section>
+
+      <section class="device-section">
+        <div class="section-header">
+          <h2>设备状态</h2>
+          <p>每张卡片展示当前本地缓存、局部观测，以及已加载策略在最近一步选择的动作。</p>
+        </div>
+        <div id="device-grid" class="device-grid"></div>
+      </section>
+
+      <section class="visual-grid">
+        <article class="chart-card">
+          <div class="panel-header">
+            <span class="panel-tag">吞吐量</span>
+            <span class="panel-meta">逐步累计</span>
+          </div>
+          <div id="throughput-chart" class="chart-surface empty-chart">运行会话后将显示曲线。</div>
+        </article>
+        <article class="chart-card">
+          <div class="panel-header">
+            <span class="panel-tag">碰撞率</span>
+            <span class="panel-meta">逐步累计</span>
+          </div>
+          <div id="collision-chart" class="chart-surface empty-chart">运行会话后将显示曲线。</div>
+        </article>
+        <article class="event-card">
+          <div class="panel-header">
+            <span class="panel-tag">最近事件</span>
+            <span class="panel-meta">最近 12 步</span>
+          </div>
+          <ol id="event-feed" class="event-feed"></ol>
+        </article>
+      </section>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+  </html>

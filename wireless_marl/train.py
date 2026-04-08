@@ -376,6 +376,8 @@ def train_qmix(cfg: dict[str, Any]) -> None:
 
 
 def train_mappo(cfg: dict[str, Any], share_params: bool) -> None:
+    import torch
+
     from wireless_marl.algos.mappo import MAPPOConfig, MAPPOTrainer
 
     ensure_dir(RESULTS_DIR)
@@ -459,6 +461,9 @@ def train_mappo(cfg: dict[str, Any], share_params: bool) -> None:
             losses = trainer.update(rollout=rollout, gamma=gamma)
 
             if episode % eval_every == 0 or episode == episodes:
+                # PPO family policies in this task are mixed strategies. Using argmax
+                # collapses them into "always standby", so evaluation keeps sampling.
+                torch.manual_seed(210000 + episode)
                 metrics = evaluate_policy(
                     env=env,
                     episodes=eval_episodes,
@@ -466,7 +471,7 @@ def train_mappo(cfg: dict[str, Any], share_params: bool) -> None:
                     action_selector=lambda obs, state_vec, _state_tuple: trainer.select_actions(
                         obs_dict=obs,
                         state_vec=state_vec,
-                        greedy=True,
+                        greedy=False,
                     )[0],
                 )
                 writer.writerow(
@@ -489,6 +494,7 @@ def train_mappo(cfg: dict[str, Any], share_params: bool) -> None:
                     f"policy_loss={losses['policy_loss']:.4f}",
                 )
 
+    torch.manual_seed(250000)
     final_metrics = evaluate_policy(
         env=env,
         episodes=eval_episodes,
@@ -496,7 +502,7 @@ def train_mappo(cfg: dict[str, Any], share_params: bool) -> None:
         action_selector=lambda obs, state_vec, _state_tuple: trainer.select_actions(
             obs_dict=obs,
             state_vec=state_vec,
-            greedy=True,
+            greedy=False,
         )[0],
     )
     save_action_hist(action_hist_path, final_metrics["action_hist"])

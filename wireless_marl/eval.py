@@ -45,6 +45,7 @@ def main() -> None:
     parser.add_argument("--algo", type=str, default=None)
     parser.add_argument("--policy", type=str, default=None)
     parser.add_argument("--episodes", type=int, default=10)
+    parser.add_argument("--greedy", action="store_true")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -101,6 +102,8 @@ def main() -> None:
         return
 
     if algo in {"mappo", "ippo"}:
+        import torch
+
         from wireless_marl.algos.mappo import MAPPOConfig, MAPPOTrainer
 
         policy_path = args.policy or str(RESULTS_DIR / f"{algo}_policy.pt")
@@ -115,6 +118,8 @@ def main() -> None:
             seed=int(cfg["seed"]),
         )
         trainer.load(policy_path)
+        # Default to stochastic evaluation for PPO-family policies in this task.
+        torch.manual_seed(123456)
         metrics = evaluate_policy(
             env=env,
             episodes=args.episodes,
@@ -122,7 +127,7 @@ def main() -> None:
             action_selector=lambda obs, state_vec, _state_tuple: trainer.select_actions(
                 obs_dict=obs,
                 state_vec=state_vec,
-                greedy=True,
+                greedy=args.greedy,
             )[0],
         )
         print_metrics(metrics)
