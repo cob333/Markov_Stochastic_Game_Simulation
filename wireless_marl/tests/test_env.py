@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from wireless_marl.env import EnvParams, WirelessMarkovGame
-from wireless_marl.utils import clip01, topology_adjacency
+from wireless_marl.utils import clip01, result_artifact_path, topology_adjacency
 
 
 def test_clip01_bounds() -> None:
@@ -74,3 +74,10 @@ def test_invalid_target_triggers_penalty_signal() -> None:
     assert info["invalid_vec"][1] == 1
     assert rewards[1] < 0.0
 
+
+def test_topology_result_paths_are_isolated() -> None:
+    default_path = result_artifact_path("results", "iql", "policy", "all_to_all")
+    star_path = result_artifact_path("results", "iql", "policy", "star")
+    assert str(default_path).endswith("results/iql_policy.npz")
+    assert str(star_path).endswith("results/iql_policy_star.npz")
+    assert default_path != star_path

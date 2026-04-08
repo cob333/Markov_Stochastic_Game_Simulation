@@ -64,3 +64,7 @@ mappo:
   hidden_size: 128
   share_params: true
   device: cpu
+
+demo:
+  history_window: 20
+  action_noise_eps: 0.03

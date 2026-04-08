@@ -11,10 +11,9 @@
       <header class="hero">
         <div>
           <p class="eyebrow">无线 MARL 演示</p>
-          <h1>四设备单信道实时策略演示</h1>
+          <h1>四设备马尔可夫随机博弈</h1>
           <p class="subcopy">
-            在二状态无线信道上回放已训练策略，逐步观察碰撞、成功发送以及系统累计行为，
-            用于课堂演示和实验结果说明。
+            实时演示系统
           </p>
         </div>
         <div class="hero-meta">
@@ -25,12 +24,15 @@
 
       <section class="control-panel">
         <div class="control-group">
-          <label for="algo-select">算法</label>
-          <select id="algo-select"></select>
-        </div>
-        <div class="control-group">
           <label for="seed-input">随机种子</label>
           <input id="seed-input" type="number" value="0" min="0" step="1" />
+        </div>
+        <div class="control-group">
+          <label for="topology-select">演示拓扑</label>
+          <select id="topology-select">
+            <option value="all_to_all">全连接拓扑</option>
+            <option value="star">星形拓扑</option>
+          </select>
         </div>
         <div class="control-group">
           <label for="speed-input">自动播放间隔</label>
@@ -45,66 +47,101 @@
       </section>
 
       <section class="summary-grid">
-        <article class="channel-panel">
+        <article class="sync-panel">
           <div class="panel-header">
-            <span class="panel-tag">信道</span>
-            <span id="step-counter" class="panel-meta">第 0 步</span>
+            <span class="panel-tag">同步状态</span>
+            <span id="sync-mode" class="panel-meta">四模型并行</span>
           </div>
-          <div class="channel-body">
-            <div id="channel-indicator" class="channel-indicator idle">空闲</div>
-            <div class="mini-facts">
-              <div>
-                <span class="fact-label">策略文件</span>
-                <strong id="policy-path">—</strong>
-              </div>
-              <div>
-                <span class="fact-label">上一时隙发送数</span>
-                <strong id="last-k-tx">—</strong>
-              </div>
-              <div>
-                <span class="fact-label">下一步拥堵概率</span>
-                <strong id="next-cong">—</strong>
-              </div>
+          <div class="sync-facts">
+            <div class="sync-fact">
+              <span class="fact-label">当前步数</span>
+              <strong id="sync-step-counter">第 0 步</strong>
+            </div>
+            <div class="sync-fact">
+              <span class="fact-label">随机种子</span>
+              <strong id="seed-display">0</strong>
+            </div>
+            <div class="sync-fact">
+              <span class="fact-label">激活模型</span>
+              <strong id="active-model-count">0 / 4</strong>
+            </div>
+            <div class="sync-fact">
+              <span class="fact-label">统计口径</span>
+              <strong id="history-window-label">最近 20 步滚动均值</strong>
+            </div>
+            <div class="sync-fact">
+              <span class="fact-label">当前拓扑</span>
+              <strong id="topology-display">全连接</strong>
             </div>
           </div>
         </article>
 
-        <article class="metrics-panel">
+        <article class="legend-panel">
           <div class="panel-header">
-            <span class="panel-tag">指标</span>
-            <span class="panel-meta">累计统计</span>
+            <span class="panel-tag">图例</span>
+            <span class="panel-meta">四模型实时对比</span>
           </div>
-          <div class="metrics-grid" id="metrics-grid"></div>
+          <div id="legend-grid" class="legend-grid"></div>
         </article>
       </section>
 
-      <section class="device-section">
+      <section class="topology-section">
+        <article class="topology-card">
+          <div class="panel-header">
+            <span class="panel-tag">当前拓扑结构</span>
+            <span id="topology-name" class="panel-meta">—</span>
+          </div>
+          <div class="topology-layout">
+            <div id="topology-graph" class="topology-graph empty-chart">加载会话后显示拓扑示意图。</div>
+            <div class="topology-facts">
+              <div>
+                <span class="fact-label">拓扑类型</span>
+                <strong id="topology-type">—</strong>
+              </div>
+              <div>
+                <span class="fact-label">设备数量</span>
+                <strong id="topology-device-count">—</strong>
+              </div>
+              <div>
+                <span class="fact-label">连接边数</span>
+                <strong id="topology-link-count">—</strong>
+              </div>
+              <div>
+                <span class="fact-label">说明</span>
+                <strong id="topology-summary">—</strong>
+              </div>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section class="model-section">
         <div class="section-header">
-          <h2>设备状态</h2>
-          <p>每张卡片展示当前本地缓存、局部观测，以及已加载策略在最近一步选择的动作。</p>
+          <h2>模型对比</h2>
+          <p>四种算法在相同随机种子和相同拓扑下同步演示，下方卡片显示每个模型的累计指标与最近一步状态。</p>
         </div>
-        <div id="device-grid" class="device-grid"></div>
+        <div id="model-grid" class="model-grid"></div>
       </section>
 
       <section class="visual-grid">
         <article class="chart-card">
           <div class="panel-header">
             <span class="panel-tag">吞吐量</span>
-            <span class="panel-meta">逐步累计</span>
+            <span class="panel-meta">最近 20 步滚动均值</span>
           </div>
           <div id="throughput-chart" class="chart-surface empty-chart">运行会话后将显示曲线。</div>
         </article>
         <article class="chart-card">
           <div class="panel-header">
             <span class="panel-tag">碰撞率</span>
-            <span class="panel-meta">逐步累计</span>
+            <span class="panel-meta">最近 20 步滚动均值</span>
           </div>
           <div id="collision-chart" class="chart-surface empty-chart">运行会话后将显示曲线。</div>
         </article>
         <article class="event-card">
           <div class="panel-header">
-            <span class="panel-tag">最近事件</span>
-            <span class="panel-meta">最近 12 步</span>
+            <span class="panel-tag">模型事件</span>
+            <span class="panel-meta">四模型最近事件汇总</span>
           </div>
           <ol id="event-feed" class="event-feed"></ol>
         </article>

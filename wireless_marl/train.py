@@ -14,10 +14,21 @@ from typing import Any, Callable
 import numpy as np
 import yaml
 
-from wireless_marl.algos.iql import IQLConfig, make_iql_agents, save_iql_agents
+from wireless_marl.algos.iql import (
+    IQLConfig,
+    load_iql_agents,
+    make_iql_agents,
+    save_iql_agents,
+)
 from wireless_marl.algos.value_iteration import ValueIterationConfig, ValueIterationPlanner
 from wireless_marl.env import EnvParams, WirelessMarkovGame
-from wireless_marl.utils import ensure_dir, set_global_seed
+from wireless_marl.utils import (
+    ensure_dir,
+    normalize_topology,
+    result_artifact_path,
+    set_global_seed,
+    topology_label,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -54,6 +65,28 @@ def save_summary(path: str | Path, metrics: dict[str, float]) -> None:
         writer = csv.writer(handle)
         writer.writerow(list(metrics.keys()))
         writer.writerow([metrics[key] for key in metrics])
+
+
+def best_policy_path(policy_path: str | Path) -> Path:
+    path = Path(policy_path)
+    return path.with_name(f"{path.stem}_best{path.suffix}")
+
+
+def metric_score(metrics: dict[str, float | np.ndarray]) -> tuple[float, float, float]:
+    return (
+        float(metrics["throughput"]),
+        float(metrics["avg_reward_per_agent"]),
+        -float(metrics["collision_rate"]),
+    )
+
+
+def is_better_metrics(
+    candidate: dict[str, float | np.ndarray],
+    best: dict[str, float | np.ndarray] | None,
+) -> bool:
+    if best is None:
+        return True
+    return metric_score(candidate) > metric_score(best)
 
 
 def evaluate_policy(
@@ -101,6 +134,7 @@ def evaluate_policy(
 def train_iql(cfg: dict[str, Any]) -> None:
     ensure_dir(RESULTS_DIR)
     set_global_seed(int(cfg["seed"]))
+    topology = str(cfg["topology"])
 
     env = make_env(cfg)
     iql_cfg = IQLConfig.from_config(cfg["iql"], gamma=float(cfg["gamma"]))
@@ -116,9 +150,11 @@ def train_iql(cfg: dict[str, Any]) -> None:
         seed=int(cfg["seed"]),
     )
 
-    log_path = RESULTS_DIR / "iql_train_log.csv"
-    action_hist_path = RESULTS_DIR / "iql_action_hist.csv"
-    policy_path = RESULTS_DIR / "iql_policy.npz"
+    log_path = result_artifact_path(RESULTS_DIR, "iql", "train_log", topology)
+    action_hist_path = result_artifact_path(RESULTS_DIR, "iql", "action_hist", topology)
+    policy_path = result_artifact_path(RESULTS_DIR, "iql", "policy", topology)
+    best_path = best_policy_path(policy_path)
+    best_metrics: dict[str, float | np.ndarray] | None = None
 
     with open(log_path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
@@ -178,23 +214,39 @@ def train_iql(cfg: dict[str, Any]) -> None:
                 )
                 print(
                     "[IQL]",
+                    f"topology={topology}",
                     f"episode={episode}",
                     f"throughput={metrics['throughput']:.4f}",
                     f"collision={metrics['collision_rate']:.4f}",
                     f"reward={metrics['avg_reward_per_agent']:.4f}",
                 )
+                if is_better_metrics(metrics, best_metrics):
+                    best_metrics = metrics
+                    save_iql_agents(best_path, agents)
+
+    trained_agents = agents
+    if best_path.exists():
+        trained_agents = load_iql_agents(
+            path=best_path,
+            n_actions=env.action_dim,
+            cfg=iql_cfg,
+            seed=int(cfg["seed"]),
+        )
 
     final_metrics = evaluate_policy(
         env=env,
         episodes=eval_episodes,
         seed=90000,
         action_selector=lambda obs, _state_vec, _state_tuple: {
-            agent_id: agents[agent_id].act(obs[agent_id], greedy=True)
+            agent_id: trained_agents[agent_id].act(obs[agent_id], greedy=True)
             for agent_id in range(env.n_agents)
         },
     )
     save_action_hist(action_hist_path, final_metrics["action_hist"])
-    save_iql_agents(policy_path, agents)
+    save_iql_agents(policy_path, trained_agents)
+    if best_path.exists():
+        best_path.unlink()
+    print(f"Topology: {topology_label(topology)}")
     print(f"Saved training log to {log_path}")
     print(f"Saved final action histogram to {action_hist_path}")
     print(f"Saved policy to {policy_path}")
@@ -203,6 +255,7 @@ def train_iql(cfg: dict[str, Any]) -> None:
 def train_value_iteration(cfg: dict[str, Any]) -> None:
     ensure_dir(RESULTS_DIR)
     set_global_seed(int(cfg["seed"]))
+    topology = str(cfg["topology"])
     env = make_env(cfg)
 
     planner = ValueIterationPlanner(
@@ -211,10 +264,12 @@ def train_value_iteration(cfg: dict[str, Any]) -> None:
     )
     history = planner.run()
 
-    log_path = RESULTS_DIR / "value_iteration_train_log.csv"
-    summary_path = RESULTS_DIR / "value_iteration_summary.csv"
-    action_hist_path = RESULTS_DIR / "value_iteration_action_hist.csv"
-    policy_path = RESULTS_DIR / "value_iteration_policy.npz"
+    log_path = result_artifact_path(RESULTS_DIR, "value_iteration", "train_log", topology)
+    summary_path = result_artifact_path(RESULTS_DIR, "value_iteration", "summary", topology)
+    action_hist_path = result_artifact_path(
+        RESULTS_DIR, "value_iteration", "action_hist", topology
+    )
+    policy_path = result_artifact_path(RESULTS_DIR, "value_iteration", "policy", topology)
 
     with open(log_path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
@@ -245,10 +300,12 @@ def train_value_iteration(cfg: dict[str, Any]) -> None:
     planner.save(policy_path)
     print(
         "[VALUE_ITERATION]",
+        f"topology={topology}",
         f"iterations={len(history)}",
         f"final_delta={history[-1]['delta'] if history else 0.0:.6e}",
         f"throughput={final_metrics['throughput']:.4f}",
     )
+    print(f"Topology: {topology_label(topology)}")
     print(f"Saved planner log to {log_path}")
     print(f"Saved summary to {summary_path}")
     print(f"Saved policy to {policy_path}")
@@ -259,6 +316,7 @@ def train_qmix(cfg: dict[str, Any]) -> None:
 
     ensure_dir(RESULTS_DIR)
     set_global_seed(int(cfg["seed"]))
+    topology = str(cfg["topology"])
     env = make_env(cfg)
     qmix_cfg = QMIXConfig.from_config(cfg["qmix"])
     train_cfg = cfg["train"]
@@ -280,9 +338,11 @@ def train_qmix(cfg: dict[str, Any]) -> None:
     global_step = 0
     interval_losses: list[float] = []
 
-    log_path = RESULTS_DIR / "qmix_train_log.csv"
-    action_hist_path = RESULTS_DIR / "qmix_action_hist.csv"
-    policy_path = RESULTS_DIR / "qmix_policy.pt"
+    log_path = result_artifact_path(RESULTS_DIR, "qmix", "train_log", topology)
+    action_hist_path = result_artifact_path(RESULTS_DIR, "qmix", "action_hist", topology)
+    policy_path = result_artifact_path(RESULTS_DIR, "qmix", "policy", topology)
+    best_path = best_policy_path(policy_path)
+    best_metrics: dict[str, float | np.ndarray] | None = None
 
     with open(log_path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
@@ -354,11 +414,18 @@ def train_qmix(cfg: dict[str, Any]) -> None:
                 interval_losses.clear()
                 print(
                     "[QMIX]",
+                    f"topology={topology}",
                     f"episode={episode}",
                     f"throughput={metrics['throughput']:.4f}",
                     f"collision={metrics['collision_rate']:.4f}",
                     f"loss={avg_loss:.4f}" if not np.isnan(avg_loss) else "loss=nan",
                 )
+                if is_better_metrics(metrics, best_metrics):
+                    best_metrics = metrics
+                    trainer.save(str(best_path))
+
+    if best_path.exists():
+        trainer.load(str(best_path))
 
     final_metrics = evaluate_policy(
         env=env,
@@ -370,6 +437,9 @@ def train_qmix(cfg: dict[str, Any]) -> None:
     )
     save_action_hist(action_hist_path, final_metrics["action_hist"])
     trainer.save(str(policy_path))
+    if best_path.exists():
+        best_path.unlink()
+    print(f"Topology: {topology_label(topology)}")
     print(f"Saved training log to {log_path}")
     print(f"Saved final action histogram to {action_hist_path}")
     print(f"Saved policy to {policy_path}")
@@ -382,6 +452,7 @@ def train_mappo(cfg: dict[str, Any], share_params: bool) -> None:
 
     ensure_dir(RESULTS_DIR)
     set_global_seed(int(cfg["seed"]))
+    topology = str(cfg["topology"])
     env = make_env(cfg)
     mappo_cfg = MAPPOConfig.from_config(cfg["mappo"])
     mappo_cfg.share_params = share_params
@@ -401,9 +472,11 @@ def train_mappo(cfg: dict[str, Any], share_params: bool) -> None:
         seed=int(cfg["seed"]),
     )
 
-    log_path = RESULTS_DIR / f"{algo_name}_train_log.csv"
-    action_hist_path = RESULTS_DIR / f"{algo_name}_action_hist.csv"
-    policy_path = RESULTS_DIR / f"{algo_name}_policy.pt"
+    log_path = result_artifact_path(RESULTS_DIR, algo_name, "train_log", topology)
+    action_hist_path = result_artifact_path(RESULTS_DIR, algo_name, "action_hist", topology)
+    policy_path = result_artifact_path(RESULTS_DIR, algo_name, "policy", topology)
+    best_path = best_policy_path(policy_path)
+    best_metrics: dict[str, float | np.ndarray] | None = None
 
     with open(log_path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
@@ -488,12 +561,18 @@ def train_mappo(cfg: dict[str, Any], share_params: bool) -> None:
                 )
                 print(
                     f"[{algo_name.upper()}]",
+                    f"topology={topology}",
                     f"episode={episode}",
                     f"throughput={metrics['throughput']:.4f}",
                     f"collision={metrics['collision_rate']:.4f}",
                     f"policy_loss={losses['policy_loss']:.4f}",
                 )
+                if is_better_metrics(metrics, best_metrics):
+                    best_metrics = metrics
+                    trainer.save(str(best_path))
 
+    if best_path.exists():
+        trainer.load(str(best_path))
     torch.manual_seed(250000)
     final_metrics = evaluate_policy(
         env=env,
@@ -507,6 +586,9 @@ def train_mappo(cfg: dict[str, Any], share_params: bool) -> None:
     )
     save_action_hist(action_hist_path, final_metrics["action_hist"])
     trainer.save(str(policy_path))
+    if best_path.exists():
+        best_path.unlink()
+    print(f"Topology: {topology_label(topology)}")
     print(f"Saved training log to {log_path}")
     print(f"Saved final action histogram to {action_hist_path}")
     print(f"Saved policy to {policy_path}")
@@ -520,11 +602,14 @@ def main() -> None:
         default=str(BASE_DIR / "config.yaml"),
     )
     parser.add_argument("--algo", type=str, default=None)
+    parser.add_argument("--topology", type=str, default=None)
     args = parser.parse_args()
 
     cfg = load_config(args.config)
     if args.algo:
         cfg["algo"] = args.algo
+    if args.topology:
+        cfg["topology"] = normalize_topology(args.topology)
 
     algo = str(cfg["algo"]).lower()
     if algo == "iql":

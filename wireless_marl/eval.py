@@ -16,7 +16,7 @@ from wireless_marl.algos.iql import IQLConfig, load_iql_agents
 from wireless_marl.algos.value_iteration import ValueIterationConfig, ValueIterationPlanner
 from wireless_marl.env import EnvParams, WirelessMarkovGame
 from wireless_marl.train import RESULTS_DIR, evaluate_policy
-from wireless_marl.utils import set_global_seed
+from wireless_marl.utils import normalize_topology, result_artifact_path, set_global_seed, topology_label
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -45,19 +45,24 @@ def main() -> None:
     parser.add_argument("--algo", type=str, default=None)
     parser.add_argument("--policy", type=str, default=None)
     parser.add_argument("--episodes", type=int, default=10)
+    parser.add_argument("--topology", type=str, default=None)
     parser.add_argument("--greedy", action="store_true")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
     if args.algo:
         cfg["algo"] = args.algo
+    if args.topology:
+        cfg["topology"] = normalize_topology(args.topology)
 
     algo = str(cfg["algo"]).lower()
+    topology = str(cfg["topology"])
     set_global_seed(int(cfg["seed"]))
     env = WirelessMarkovGame(EnvParams.from_config(cfg))
+    print(f"Topology: {topology_label(topology)}")
 
     if algo == "iql":
-        policy_path = args.policy or str(RESULTS_DIR / "iql_policy.npz")
+        policy_path = args.policy or str(result_artifact_path(RESULTS_DIR, "iql", "policy", topology))
         iql_cfg = IQLConfig.from_config(cfg["iql"], gamma=float(cfg["gamma"]))
         agents = load_iql_agents(
             path=policy_path,
@@ -80,7 +85,7 @@ def main() -> None:
     if algo == "qmix":
         from wireless_marl.algos.qmix import QMIXConfig, QMIXTrainer
 
-        policy_path = args.policy or str(RESULTS_DIR / "qmix_policy.pt")
+        policy_path = args.policy or str(result_artifact_path(RESULTS_DIR, "qmix", "policy", topology))
         trainer = QMIXTrainer(
             n_agents=env.n_agents,
             obs_dim=env.obs_dim,
@@ -106,7 +111,9 @@ def main() -> None:
 
         from wireless_marl.algos.mappo import MAPPOConfig, MAPPOTrainer
 
-        policy_path = args.policy or str(RESULTS_DIR / f"{algo}_policy.pt")
+        policy_path = args.policy or str(
+            result_artifact_path(RESULTS_DIR, algo, "policy", topology)
+        )
         mappo_cfg = MAPPOConfig.from_config(cfg["mappo"])
         mappo_cfg.share_params = algo == "mappo"
         trainer = MAPPOTrainer(
@@ -134,7 +141,9 @@ def main() -> None:
         return
 
     if algo == "value_iteration":
-        policy_path = args.policy or str(RESULTS_DIR / "value_iteration_policy.npz")
+        policy_path = args.policy or str(
+            result_artifact_path(RESULTS_DIR, "value_iteration", "policy", topology)
+        )
         planner = ValueIterationPlanner(
             params=env.params,
             cfg=ValueIterationConfig.from_config(cfg["value_iteration"]),

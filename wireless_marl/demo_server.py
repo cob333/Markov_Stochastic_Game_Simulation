@@ -21,19 +21,17 @@ from flask import Flask, jsonify, request, send_from_directory
 from wireless_marl.algos.iql import IQLConfig, load_iql_agents
 from wireless_marl.algos.value_iteration import ValueIterationConfig, ValueIterationPlanner
 from wireless_marl.env import EnvParams, WirelessMarkovGame
+from wireless_marl.utils import (
+    normalize_topology,
+    resolve_policy_artifact_path,
+    result_artifact_path,
+    topology_label,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = BASE_DIR / "results"
 DEMO_DIR = BASE_DIR / "demo"
-
-MODEL_FILES = {
-    "value_iteration": RESULTS_DIR / "value_iteration_policy.npz",
-    "iql": RESULTS_DIR / "iql_policy.npz",
-    "qmix": RESULTS_DIR / "qmix_policy.pt",
-    "mappo": RESULTS_DIR / "mappo_policy.pt",
-    "ippo": RESULTS_DIR / "ippo_policy.pt",
-}
 
 ALGO_LABELS = {
     "value_iteration": "值迭代",
@@ -53,8 +51,12 @@ class SessionState:
     seed: int
     env: WirelessMarkovGame
     policy_path: str
+    policy_topology: str
     actor: Callable[[dict[int, np.ndarray], np.ndarray, tuple[int, ...]], dict[int, int]]
     obs_dict: dict[int, np.ndarray]
+    playback_rng: np.random.Generator
+    history_window: int
+    action_noise_eps: float
     total_steps: int = 0
     total_success: int = 0
     total_collisions: int = 0
@@ -69,6 +71,10 @@ class SessionState:
             "steps": [],
             "throughput": [],
             "collision_rate": [],
+            "throughput_window": [],
+            "collision_rate_window": [],
+            "step_throughput": [],
+            "step_collision": [],
             "avg_reward_per_agent": [],
             "avg_energy_per_agent": [],
         }
@@ -100,12 +106,39 @@ def action_label(env: WirelessMarkovGame, agent_id: int, action: int | None) -> 
     return f"发送至 {target}" if target is not None else "发送至 ?"
 
 
+def apply_demo_action_noise(
+    actions: dict[int, int],
+    env: WirelessMarkovGame,
+    rng: np.random.Generator,
+    eps: float,
+) -> dict[int, int]:
+    if eps <= 0.0:
+        return {agent_id: int(action) for agent_id, action in actions.items()}
+
+    noisy_actions: dict[int, int] = {}
+    for agent_id, action in actions.items():
+        if rng.random() < eps:
+            noisy_actions[agent_id] = int(rng.integers(0, env.action_dim))
+        else:
+            noisy_actions[agent_id] = int(action)
+    return noisy_actions
+
+
 def action_selector_for_algo(
     algo: str,
     cfg: dict[str, Any],
     env: WirelessMarkovGame,
-) -> tuple[Callable[[dict[int, np.ndarray], np.ndarray, tuple[int, ...]], dict[int, int]], str]:
-    policy_path = MODEL_FILES[algo]
+) -> tuple[
+    Callable[[dict[int, np.ndarray], np.ndarray, tuple[int, ...]], dict[int, int]],
+    str,
+    str,
+]:
+    policy_path, policy_topology = resolve_policy_artifact_path(
+        RESULTS_DIR,
+        algo,
+        str(cfg["topology"]),
+        allow_fallback=True,
+    )
     if not policy_path.exists():
         raise FileNotFoundError(f"缺少已训练策略文件：{policy_path}")
 
@@ -126,7 +159,7 @@ def action_selector_for_algo(
                 for agent_id in range(env.n_agents)
             }
 
-        return act, str(policy_path)
+        return act, str(policy_path), policy_topology
 
     if algo == "value_iteration":
         planner = ValueIterationPlanner(
@@ -143,7 +176,7 @@ def action_selector_for_algo(
                 agent_id: int(action) for agent_id, action in enumerate(joint_action)
             }
 
-        return act, str(policy_path)
+        return act, str(policy_path), policy_topology
 
     if algo == "qmix":
         from wireless_marl.algos.qmix import QMIXConfig, QMIXTrainer
@@ -163,7 +196,7 @@ def action_selector_for_algo(
         ) -> dict[int, int]:
             return trainer.select_actions(obs_dict, eps=0.0, greedy=True)
 
-        return act, str(policy_path)
+        return act, str(policy_path), policy_topology
 
     if algo in {"mappo", "ippo"}:
         import torch
@@ -190,30 +223,44 @@ def action_selector_for_algo(
         ) -> dict[int, int]:
             return trainer.select_actions(obs_dict=obs_dict, state_vec=state_vec, greedy=False)[0]
 
-        return act, str(policy_path)
+        return act, str(policy_path), policy_topology
 
     raise ValueError(f"不支持的算法：{algo}")
 
 
-def available_models() -> list[dict[str, Any]]:
+def available_models(topology: str) -> list[dict[str, Any]]:
     torch_installed = importlib.util.find_spec("torch") is not None
+    topology_name = normalize_topology(topology)
     models = []
     for algo in ("value_iteration", "iql", "qmix", "mappo", "ippo"):
-        path = MODEL_FILES[algo]
+        path, policy_topology = resolve_policy_artifact_path(
+            RESULTS_DIR,
+            algo,
+            topology_name,
+            allow_fallback=True,
+        )
         available = path.exists()
         reason = ""
+        note = ""
         if not available:
             reason = "缺少策略文件"
         elif algo in TORCH_ALGOS and not torch_installed:
             available = False
             reason = "未安装 torch"
+        elif policy_topology != topology_name:
+            note = f"缺少{topology_label(topology_name)}专用策略，已回退到{topology_label(policy_topology)}策略"
         models.append(
             {
                 "id": algo,
                 "label": ALGO_LABELS[algo],
                 "available": available,
                 "reason": reason,
+                "note": note,
                 "path": str(path),
+                "topology": topology_name,
+                "topology_label": topology_label(topology_name),
+                "policy_topology": policy_topology,
+                "policy_topology_label": topology_label(policy_topology),
             }
         )
     return models
@@ -245,9 +292,22 @@ def metrics_payload(session: SessionState) -> dict[str, float]:
 
 def append_history(session: SessionState) -> None:
     metrics = metrics_payload(session)
+    step_success = 0.0
+    step_collision = 0.0
+    if session.last_info is not None:
+        step_success = float(np.sum(session.last_info["success_vec"]))
+        step_collision = float(session.last_info["collision"])
+
+    session.history["step_throughput"].append(step_success)
+    session.history["step_collision"].append(step_collision)
+    step_window = max(1, session.history_window)
+    throughput_window = session.history["step_throughput"][-step_window:]
+    collision_window = session.history["step_collision"][-step_window:]
     session.history["steps"].append(float(session.total_steps))
     session.history["throughput"].append(float(metrics["throughput"]))
     session.history["collision_rate"].append(float(metrics["collision_rate"]))
+    session.history["throughput_window"].append(float(np.mean(throughput_window)))
+    session.history["collision_rate_window"].append(float(np.mean(collision_window)))
     session.history["avg_reward_per_agent"].append(float(metrics["avg_reward_per_agent"]))
     session.history["avg_energy_per_agent"].append(float(metrics["avg_energy_per_agent"]))
 
@@ -303,6 +363,8 @@ def serialize_session(session: SessionState) -> dict[str, Any]:
         "algo": session.algo,
         "algo_label": ALGO_LABELS[session.algo],
         "policy_path": session.policy_path,
+        "policy_topology": session.policy_topology,
+        "policy_topology_label": topology_label(session.policy_topology),
         "seed": session.seed,
         "terminated": session.terminated,
         "step_index": session.total_steps,
@@ -310,8 +372,14 @@ def serialize_session(session: SessionState) -> dict[str, Any]:
             "value": int(session.env.channel),
             "label": "空闲" if int(session.env.channel) == 0 else "拥堵",
         },
+        "topology": {
+            "type": session.env.params.topology,
+            "label": topology_label(session.env.params.topology),
+            "adjacency": session.env.adjacency.tolist(),
+        },
         "buffers": [int(value) for value in session.env.buffers.tolist()],
         "metrics": metrics,
+        "history_window": session.history_window,
         "agents": agents_payload,
         "last_step": last_step,
         "history": session.history,
@@ -319,26 +387,33 @@ def serialize_session(session: SessionState) -> dict[str, Any]:
     }
 
 
-def build_session(config_path: str | Path, algo: str, seed: int) -> SessionState:
+def build_session(config_path: str | Path, algo: str, seed: int, topology: str) -> SessionState:
     cfg = load_config(config_path)
     cfg["algo"] = algo
     cfg["seed"] = seed
+    cfg["topology"] = normalize_topology(topology)
     env = WirelessMarkovGame(EnvParams.from_config(cfg))
     obs_dict = env.reset(seed=seed)
-    actor, policy_path = action_selector_for_algo(algo=algo, cfg=cfg, env=env)
+    actor, policy_path, policy_topology = action_selector_for_algo(algo=algo, cfg=cfg, env=env)
     session = SessionState(
         session_id=uuid4().hex,
         algo=algo,
         seed=seed,
         env=env,
         policy_path=policy_path,
+        policy_topology=policy_topology,
         actor=actor,
         obs_dict={agent_id: obs.copy() for agent_id, obs in obs_dict.items()},
+        playback_rng=np.random.default_rng(seed + 2024),
+        history_window=int(cfg.get("demo", {}).get("history_window", 20)),
+        action_noise_eps=float(cfg.get("demo", {}).get("action_noise_eps", 0.0)),
     )
-    push_event(
-        session,
-        f"会话已重置，算法 {ALGO_LABELS[algo]}，随机种子 {seed}。",
+    event = (
+        f"会话已重置，算法 {ALGO_LABELS[algo]}，拓扑 {topology_label(cfg['topology'])}，随机种子 {seed}。"
     )
+    if policy_topology != cfg["topology"]:
+        event += f" 当前使用{topology_label(policy_topology)}策略回放。"
+    push_event(session, event)
     return session
 
 
@@ -354,6 +429,12 @@ def step_session(session: SessionState, manual_actions: list[int] | None = None)
         actions = {agent_id: int(manual_actions[agent_id]) for agent_id in range(session.env.n_agents)}
     else:
         actions = session.actor(session.obs_dict, state_vec, state_tuple)
+        actions = apply_demo_action_noise(
+            actions=actions,
+            env=session.env,
+            rng=session.playback_rng,
+            eps=session.action_noise_eps,
+        )
 
     next_obs, rewards, terminated, truncated, info = session.env.step(actions)
     session.obs_dict = {agent_id: obs.copy() for agent_id, obs in next_obs.items()}
@@ -390,15 +471,32 @@ def create_app(config_path: str | Path) -> Flask:
 
     @app.get("/api/models")
     def models():
-        return jsonify({"models": available_models()})
+        topology = request.args.get("topology", "all_to_all")
+        try:
+            topology_name = normalize_topology(topology)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": str(exc)}), 400
+        return jsonify(
+            {
+                "topology": topology_name,
+                "topology_label": topology_label(topology_name),
+                "models": available_models(topology_name),
+            }
+        )
 
     @app.post("/api/session/reset")
     def reset():
         payload = request.get_json(silent=True) or {}
         algo = str(payload.get("algo", "iql")).lower()
         seed = int(payload.get("seed", 0))
+        topology = str(payload.get("topology", "all_to_all"))
         try:
-            session = build_session(config_path=config_path, algo=algo, seed=seed)
+            session = build_session(
+                config_path=config_path,
+                algo=algo,
+                seed=seed,
+                topology=topology,
+            )
         except Exception as exc:  # noqa: BLE001
             return jsonify({"error": str(exc)}), 400
         with SESSIONS_LOCK:

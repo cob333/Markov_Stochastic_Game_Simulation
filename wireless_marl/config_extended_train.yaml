@@ -1,0 +1,70 @@
+seed: 0
+algo: iql
+
+n_agents: 4
+episode_len: 200
+gamma: 0.95
+
+arrival_p: 0.3
+succ_idle: 0.95
+succ_cong: 0.60
+p_base: 0.05
+p_load: 0.20
+p_persist: 0.50
+
+r_succ: 1.0
+c_coll: 1.0
+c_fail: 0.3
+c_delay: 0.01
+c_invalid: 0.2
+e_tx: 0.05
+e_wait: 0.005
+e_sleep: 0.001
+
+p_obs_correct: 0.9
+topology: all_to_all
+
+train:
+  episodes: 3000
+  eval_every: 100
+  eval_episodes: 30
+
+value_iteration:
+  tol: 1.0e-6
+  max_iters: 100
+
+iql:
+  alpha: 0.1
+  eps_start: 1.0
+  eps_end: 0.05
+  eps_decay: 0.998
+
+qmix:
+  lr: 0.0005
+  batch_size: 64
+  buffer_size: 20000
+  warmup_steps: 1000
+  train_every: 4
+  tau: 0.01
+  eps_start: 1.0
+  eps_end: 0.05
+  eps_decay: 0.998
+  agent_hidden: 64
+  mixing_hidden: 32
+  device: cpu
+
+mappo:
+  lr: 0.0003
+  clip_eps: 0.2
+  batch_size: 1024
+  update_epochs: 6
+  gae_lambda: 0.95
+  ent_coef: 0.01
+  vf_coef: 0.5
+  hidden_size: 128
+  share_params: true
+  device: cpu
+
+demo:
+  history_window: 20
+  action_noise_eps: 0.03
